@@ -1377,7 +1377,7 @@ function Invoke-EgressAssess
                     $currentChunk++
                 }
                 $writer.close()
-
+                $reader.close()
                 Write-Verbose "[*] Transaction Complete."
             }
 
