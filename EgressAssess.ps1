@@ -1365,28 +1365,18 @@ function Invoke-EgressAssess
                 $wc.Headers.Add('Filename', $FileName)
 
                 $reader = New-Object System.IO.FileStream($SourceFilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read)
-                $bufferSize = 256000000
+                $writer = $wc.OpenWrite($uri, "POST")
+                $bufferSize = 10000000
                 $buffer = New-Object byte[] $bufferSize
                 $currentChunk = 1
-                $totalChunks = [math]::Round($reader.Length / $bufferSize)
+                $totalChunks = [math]::max(1, [math]::Round($reader.Length / $bufferSize))
 
                 while (($n = $reader.Read($buffer, 0, $bufferSize)) -gt 0) {
                     Write-Verbose  "[*] Uploading chunk $currentChunk of $totalChunks.."
-
-                    # Add append on second chunk, so that we aren't always appending to a remote file
-                    if ($currentChunk -eq 2) {
-                        $wc.Headers.Add('Append', 'append')
-                    }
-
-                    if ($n -lt $bufferSize) {
-                        $tmp = New-Object byte[] $n
-                        [array]::Copy($tmp, $buffer, $n)
-                        $buffer = $tmp
-                        $bufferSize = $buffer.Length
-                    }
-                    $wc.UploadData($uri, 'POST', $buffer)
+                    $writer.Write($buffer,0,$n)
                     $currentChunk++
                 }
+                $writer.close()
 
                 Write-Verbose "[*] Transaction Complete."
             }
