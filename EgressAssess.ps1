@@ -1345,12 +1345,12 @@ function Invoke-EgressAssess
             if ($UserAgent)
             {
                 Get-UserAgent -UASelect $UserAgent
-                $wc.Headers.Add('UserAgent', $script:UserAgent)
+                $wc.Headers.Add('User-Agent', $script:UserAgent)
             }
             else
             {
                 Get-UserAgent -UASelect ""
-                $wc.Headers.Add('UserAgent', $script:UserAgent)
+                $wc.Headers.Add('User-Agent', $script:UserAgent)
             }
 
             if ($proxy)
